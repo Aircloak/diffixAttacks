@@ -6,8 +6,6 @@ This repo contains an example attack on the Diffix anonymization system implemen
 
 This directory requires the public repository `Aircloak/diffixAttackModules`. diffixAttackModules and diffixAttacks should share the same parent directory. If they do not, then modify the `use lib 'path';` lines in the `file.pl` files.
 
-You may use the `Aircloak/diffixAttackModules/config/cpanfile` to install the needed perl modules (with cpanm probably). 
-
 ## To Configure
 
 Copy `Aircloak/diffixAttackModules/diffixAttackConfig/genConfig-example.pm` to the file `genConfig.pm` in the same directory. Modify `getConfig.pm` to contain the API token needed for authentication. The token can be requested from your account on attack.aircloak.com.
