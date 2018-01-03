@@ -44,7 +44,7 @@ $| = 1;
 
 # ---------------- config ----------------------
 
-my $p = 1;		# print debug info or not
+my $p = 0;		# print debug info or not
 my $parallel = 8;	# max number parallel queries
 my $maxGap = 16;
 
