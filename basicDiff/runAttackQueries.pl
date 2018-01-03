@@ -77,7 +77,6 @@ else {
   open(my $temp, ">", $answerFile);
   print $temp "use strict;\n\nmy \$answers = [\n];\n\nsub getAnswers{return \$answers;}\n\n1;\n";
   close $temp;
-  exit;
 }
 print "%signatures\n";
 my $outputFile = $answerFile.".temp.txt";
