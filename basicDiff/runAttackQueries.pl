@@ -46,7 +46,7 @@ $| = 1;
 
 my $p = 0;		# print debug info or not
 my $parallel = 8;	# max number parallel queries
-my $maxGap = 16;
+my $maxGap = 24;
 
 # ---------------- end config ----------------------
 
@@ -83,8 +83,6 @@ my $outputFile = $answerFile.".temp.txt";
 open(my $ofh, ">>", $outputFile) or die "Open failed: $outputFile";
 
 print $ofh "use strict;\n\nmy \$answers = [\n";
-
-#zzzz need to make assoc array from answer file
 
 my $airIndex = 0;
 
@@ -169,63 +167,46 @@ while(1) {
       if ($p) { print "valsArray: @valsArray\n"; }
       $q->{maxGuessGap} = -1;
       $q->{guess} = "noguess";
-      foreach my $gap (0..$maxGap) {
-        # We start by selecting the first two entries, and seeing if
-        # they exceed the gap threshold. If they don't, then we set
-        # $totalMax to 2 to indicate that there is not a single max
-        # with a large enough gap
-        my $val = $valsArray[0];
-        my $max = $arrayWith{$val} - $arrayWithout{$val};
-        my $guess = $val;
-
-        if ($#valsArray >= 1) {
-          $val = $valsArray[1];
+      my $totalMax = 2;
+      my $val = $valsArray[0];
+      my $max = $arrayWith{$val} - $arrayWithout{$val};
+      my $guess = $val;
+      if ($p) { print "init max: val $val with diff $max ($totalMax)\n"; }
+      if ($#valsArray >= 1) {
+        for (my $i = 1; $i <= $#valsArray; $i++) {
+          my $val = $valsArray[$i];
           my $diff = $arrayWith{$val} - $arrayWithout{$val};
-          my $totalMax = 1;
-          if (abs($max - $diff) <= $gap) {
-            # not enough difference between the first 2 buckets, so initialize
-            # as multiple maxes
-            $totalMax = 2;
-            if ($diff > $max) {
-              # nevertheless record the max
-              $max = $diff;
-              $guess = $val;
-            }
-          }
-          elsif ($diff > ($max + $gap)) {
+          if ($diff > $max) {
             $max = $diff;
             $guess = $val;
             $totalMax = 1;
+            if ($p) { print "------------------ new max: val $val with diff $diff ($totalMax)\n"; }
           }
-          # now check the remaining buckets
-          for (my $i = 2; $i <= $#valsArray; $i++) {
-            my $val = $valsArray[$i];
-            my $diff = $arrayWith{$val} - $arrayWithout{$val};
-            if ($p) { print "Try $val with diff $diff ($arrayWith{$val}, $arrayWithout{$val})\n"; }
-            if (($diff >= $max) && ($diff <= ($max + $gap))) {
-              $totalMax++;
-            }
-            elsif ($diff > ($max + $gap)) {
-              $max = $diff;
-              $guess = $val;
-              $totalMax = 1;
-            }
+          elsif ($diff == $max) {
+            $totalMax++;
+            if ($p) { print "duplicate max: val $val with diff $diff ($totalMax)\n"; }
           }
-          if ($totalMax > 1) {
-            if ($p) { print "No Guess ($totalMax)\n"; }
-          }
-          else {
-            if ($p) { print "Guess is $guess, answer is $q->{answer}\n"; }
-            $q->{maxGuessGap} = $gap;
-            if ($guess eq $q->{answer}) {
-              die "unexpected answer right" if ($q->{guess} eq "wrong");
-              $q->{guess} = "right";
-            }
-            else {
-              die "unexpected answer wrong" if ($q->{guess} eq "right");
-              $q->{guess} = "wrong";
-            }
-          }
+          elsif ($p) { print "not max: val $val with diff $diff ($totalMax)\n"; }
+        }
+      }
+      if ($totalMax > 1) {
+        if ($p) { print "No Guess ($totalMax)\n"; }
+      }
+      else {
+        if ($p) { print "Guess is $guess, answer is $q->{answer}\n"; }
+        if ($max < 0) {
+          $q->{maxGuessGap} = 0;
+        }
+        else {
+          $q->{maxGuessGap} = $max;
+        }
+        if ($guess eq $q->{answer}) {
+          die "unexpected answer right" if ($q->{guess} eq "wrong");
+          $q->{guess} = "right";
+        }
+        else {
+          die "unexpected answer wrong" if ($q->{guess} eq "right");
+          $q->{guess} = "wrong";
         }
       }
       printAnswer($ofh, $q);
@@ -252,6 +233,11 @@ while(1) {
         print "Skip query with attack posDiff ($airIndex)\n";
         $airIndex++; 
       }
+      elsif (malformedQuery($q)) {
+        print "Skip malformed query ($airIndex)\n";
+        print Dumper $q;
+        $airIndex++; 
+      }
       else { last; }
     }
     if (($qi == $notStarted) && ($airIndex <= $#qList)) {
@@ -261,7 +247,7 @@ while(1) {
       $ongoingQueries[$_] = $airIndex;
       $airIndex++;
       if ($p) { print "Try query:\n"; print Dumper $q; }
-      if ($q->{attack} eq "negDiff") {
+      if (($q->{attack} eq "negDiff") || ($q->{attack} eq "negChaff")) {
         my $run->{print} = $p;
         $run->{db} = $q->{db};
 
@@ -270,12 +256,14 @@ while(1) {
         if ($p) { print Dumper $run; }
         $q->{startTVWithout} = [ gettimeofday ];
         $q->{qidWithout} = queryDatabaseAirQ($run);
+        $q->{sqlWithout} = $run->{sql};
 
         # This is the query that includes the victim
         $run->{sql} = getNegDiffSql($q, "include");
         if ($p) { print Dumper $run; }
         $q->{startTVWith} = [ gettimeofday ];
         $q->{qidWith} = queryDatabaseAirQ($run);
+        $q->{sqlWith} = $run->{sql};
       }
     }
   }
@@ -324,6 +312,29 @@ my($q, $type) = @_;
     }
     if ($i < $#baseCols) {
       $where .= "AND ";
+    }
+  }
+  # add the negative chaff conditions, if any
+  if ($q->{attack} eq "negChaff") {
+    my @chaffVals = @{ $q->{chaffVals} };
+    if ($#chaffVals >= 0) { 
+      if (length($where) == 0) {
+        $where .= "WHERE ";
+      }
+      else {
+        $where .= "AND ";
+      }
+    }
+    for (my $i = 0; $i <= $#chaffVals; $i++) {
+      if ($q->{isolateType} eq "text") {
+        $where .= "$q->{isolateCol} <> '$q->{chaffVals}->[$i]' ";
+      }
+      else {
+        $where .= "$q->{isolateCol} <> $q->{chaffVals}->[$i] ";
+      }
+      if ($i < $#chaffVals) {
+        $where .= "AND ";
+      }
     }
   }
   my $sql = "SELECT $q->{unknownCol}, count(*) FROM $q->{table} $where GROUP BY 1";
@@ -399,10 +410,22 @@ my($ofh, $q) = @_;
   print $ofh "    answer => \"$q->{answer}\",\n";
   print $ofh "    unknownCol => \"$q->{unknownCol}\",\n";
   print $ofh "    guess => \"$q->{guess}\",\n";
-  print $ofh "    elapsed => $q->{elapsed},\n";
+  print $ofh "    sqlWith => \"$q->{sqlWith}\",\n";
+  print $ofh "    sqlWithout => \"$q->{sqlWithout},\"\n";
   print $ofh "    sig => \"$sig\",\n";
   if (exists $q->{numBaseRows}) {
     print $ofh "    numBaseRows => $q->{numBaseRows},\n";
   }
   print $ofh "  },\n";
+}
+
+sub malformedQuery {
+my($q) = @_;
+  if (length($q->{isolateCol}) == 0) { return 1; }
+  my @baseCols = @{ $q->{baseCols} };
+
+  for (my $i = 0; $i <= $#baseCols; $i++) {
+    if (length($q->{baseCols}->[$i]) == 0) { return 1; }
+  }
+  return 0;
 }
